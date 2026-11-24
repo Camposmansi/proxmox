@@ -6,31 +6,124 @@ INSTALL_PATH="/usr/local/bin/update-dockers.sh"
 CONFIG_FILE="/etc/update-dockers.conf"
 LOG_FILE="/var/log/update-dockers-cron.log"
 CRON_LINE="0 3 * * 0 $INSTALL_PATH >> $LOG_FILE 2>&1"
+VERSION="1.1.0"
+
+if [[ -t 1 ]]; then
+  RESET="\033[0m"
+  BOLD="\033[1m"
+  DIM="\033[2m"
+  RED="\033[31m"
+  GREEN="\033[32m"
+  YELLOW="\033[33m"
+  BLUE="\033[34m"
+  CYAN="\033[36m"
+  WHITE="\033[37m"
+else
+  RESET=""
+  BOLD=""
+  DIM=""
+  RED=""
+  GREEN=""
+  YELLOW=""
+  BLUE=""
+  CYAN=""
+  WHITE=""
+fi
+
+clear_screen() {
+  if [[ -t 1 ]]; then
+    clear
+  fi
+}
+
+line() {
+  printf '%b\n' "${BLUE}────────────────────────────────────────────────────────${RESET}"
+}
+
+header() {
+  clear_screen
+  printf '%b\n' "${CYAN}${BOLD}"
+  cat <<'EOF'
+   ____                      __  ___
+  / __ \_________  _  ______/  |/  /___  _  __
+ / /_/ / ___/ __ \| |/_/ __  /|_/ / __ \| |/_/
+/ ____/ /  / /_/ />  </ /_/ /  / / /_/ />  <
+/_/   /_/   \____/_/|_|\__,_/_/ /_/\____/_/|_|
+
+        Docker Compose Updater for Proxmox
+EOF
+  printf '%b\n' "${RESET}"
+  printf '%b\n' "${DIM}Version ${VERSION} · Camposmansi/proxmox${RESET}"
+  line
+}
+
+ok()    { printf '%b\n' "${GREEN}✓${RESET} $*"; }
+info()  { printf '%b\n' "${CYAN}ℹ${RESET} $*"; }
+warn()  { printf '%b\n' "${YELLOW}⚠${RESET} $*"; }
+error() { printf '%b\n' "${RED}✗${RESET} $*"; }
 
 require_root() {
   if [[ $EUID -ne 0 ]]; then
-    echo "Este instalador debe ejecutarse como root."
+    error "Este instalador debe ejecutarse como root."
     exit 1
   fi
 }
 
+cron_exists() {
+  crontab -l 2>/dev/null | grep -Fq "$INSTALL_PATH >> $LOG_FILE"
+}
+
+show_status_compact() {
+  local script_state cron_state config_state
+
+  if [[ -x "$INSTALL_PATH" ]]; then
+    script_state="${GREEN}INSTALADO${RESET}"
+  else
+    script_state="${RED}NO INSTALADO${RESET}"
+  fi
+
+  if cron_exists; then
+    cron_state="${GREEN}ACTIVO${RESET}"
+  else
+    cron_state="${YELLOW}NO CONFIGURADO${RESET}"
+  fi
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    config_state="${GREEN}OK${RESET}"
+  else
+    config_state="${YELLOW}NO EXISTE${RESET}"
+  fi
+
+  printf " %-18s %b\n" "Script:" "$script_state"
+  printf " %-18s %b\n" "Cron:" "$cron_state"
+  printf " %-18s %b\n" "Configuracion:" "$config_state"
+  printf " %-18s %s\n" "Horario:" "Domingo 03:00"
+  line
+}
+
 download_script() {
+  local tmp
   tmp="$(mktemp)"
+
+  info "Descargando update-dockers.sh desde GitHub..."
+
   if ! curl -fsSL "$SCRIPT_URL" -o "$tmp"; then
-    echo "ERROR: no se pudo descargar $SCRIPT_URL"
     rm -f "$tmp"
-    exit 1
+    error "No se pudo descargar:"
+    printf '  %s\n' "$SCRIPT_URL"
+    return 1
   fi
 
   if ! bash -n "$tmp"; then
-    echo "ERROR: el script descargado tiene errores de sintaxis."
     rm -f "$tmp"
-    exit 1
+    error "El script descargado contiene errores de sintaxis."
+    return 1
   fi
 
   install -m 0755 "$tmp" "$INSTALL_PATH"
   rm -f "$tmp"
-  echo "Instalado: $INSTALL_PATH"
+
+  ok "Script instalado en $INSTALL_PATH"
 }
 
 ensure_config() {
@@ -45,9 +138,9 @@ INCLUDE=112,118,120,130,150
 PRUNE=true
 EOF
     chmod 0644 "$CONFIG_FILE"
-    echo "Creado: $CONFIG_FILE"
+    ok "Configuracion creada en $CONFIG_FILE"
   else
-    echo "Conservado: $CONFIG_FILE"
+    info "Se conserva la configuracion existente: $CONFIG_FILE"
   fi
 }
 
@@ -55,9 +148,9 @@ add_cron() {
   local current
   current="$(crontab -l 2>/dev/null || true)"
 
-  if grep -Fq "$INSTALL_PATH >> $LOG_FILE" <<< "$current"; then
-    echo "El cron ya existe."
-    return
+  if cron_exists; then
+    info "El cron ya esta instalado."
+    return 0
   fi
 
   {
@@ -65,66 +158,202 @@ add_cron() {
     printf '%s\n' "$CRON_LINE"
   } | awk 'NF' | crontab -
 
-  echo "Cron instalado: domingo a las 03:00"
+  ok "Cron instalado: domingos a las 03:00"
 }
 
 remove_cron() {
   local current
   current="$(crontab -l 2>/dev/null || true)"
+
+  if ! cron_exists; then
+    info "No hay ningun cron instalado."
+    return 0
+  fi
+
   printf '%s\n' "$current" | grep -Fv "$INSTALL_PATH >> $LOG_FILE" | crontab -
-  echo "Cron eliminado."
+  ok "Cron eliminado."
 }
 
-status() {
-  echo
-  echo "Script:"
+status_full() {
+  header
+  printf '%b\n' "${BOLD}Estado del sistema${RESET}"
+  line
+
   if [[ -x "$INSTALL_PATH" ]]; then
-    echo "  OK - $INSTALL_PATH"
+    ok "Script instalado: $INSTALL_PATH"
   else
-    echo "  NO instalado"
+    warn "Script no instalado."
   fi
 
-  echo "Configuracion:"
   if [[ -f "$CONFIG_FILE" ]]; then
+    ok "Configuracion: $CONFIG_FILE"
+    echo
     sed 's/^/  /' "$CONFIG_FILE"
   else
-    echo "  NO existe"
+    warn "No existe $CONFIG_FILE"
   fi
 
-  echo "Cron:"
-  crontab -l 2>/dev/null | grep -F "$INSTALL_PATH" || echo "  NO instalado"
+  echo
+  if cron_exists; then
+    ok "Cron activo"
+    crontab -l 2>/dev/null | grep -F "$INSTALL_PATH"
+  else
+    warn "Cron no configurado"
+  fi
 
-  echo "Ultimas lineas del log:"
+  echo
   if [[ -f "$LOG_FILE" ]]; then
+    printf '%b\n' "${BOLD}Ultimas 20 lineas del log${RESET}"
+    line
     tail -20 "$LOG_FILE"
   else
-    echo "  Todavia no existe $LOG_FILE"
+    info "Todavia no existe $LOG_FILE"
   fi
 }
 
 run_now() {
+  header
+
   if [[ ! -x "$INSTALL_PATH" ]]; then
-    echo "Primero instala el script."
-    exit 1
+    error "Primero debes instalar el script."
+    return 1
   fi
 
   touch "$LOG_FILE"
+  chmod 0644 "$LOG_FILE"
+
+  printf '%b\n' "${BOLD}Ejecucion manual${RESET}"
+  line
+  info "El resultado tambien se guardara en $LOG_FILE"
+  echo
+
   "$INSTALL_PATH" 2>&1 | tee -a "$LOG_FILE"
 }
 
 install_all() {
-  download_script
+  header
+  printf '%b\n' "${BOLD}Instalacion${RESET}"
+  line
+
+  download_script || return 1
   ensure_config
   touch "$LOG_FILE"
   chmod 0644 "$LOG_FILE"
   add_cron
+
+  echo
+  ok "Instalacion completada."
+  printf "  %-16s %s\n" "Script:" "$INSTALL_PATH"
+  printf "  %-16s %s\n" "Config:" "$CONFIG_FILE"
+  printf "  %-16s %s\n" "Log:" "$LOG_FILE"
+  printf "  %-16s %s\n" "Cron:" "Domingo 03:00"
+}
+
+update_local() {
+  header
+  printf '%b\n' "${BOLD}Actualizacion desde GitHub${RESET}"
+  line
+
+  download_script
+}
+
+view_files() {
+  header
+  printf '%b\n' "${BOLD}Configuracion${RESET}"
+  line
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    cat "$CONFIG_FILE"
+  else
+    warn "No existe $CONFIG_FILE"
+  fi
+
+  echo
+  printf '%b\n' "${BOLD}Script instalado${RESET}"
+  line
+
+  if [[ -f "$INSTALL_PATH" ]]; then
+    cat "$INSTALL_PATH"
+  else
+    warn "No existe $INSTALL_PATH"
+  fi
+}
+
+rotate_log() {
+  header
+  printf '%b\n' "${BOLD}Rotacion de log${RESET}"
+  line
+
+  if [[ -f "$LOG_FILE" ]]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.old"
+    touch "$LOG_FILE"
+    chmod 0644 "$LOG_FILE"
+    ok "Log anterior guardado en $LOG_FILE.old"
+  else
+    warn "Todavia no existe $LOG_FILE"
+  fi
 }
 
 remove_all() {
+  header
+  printf '%b\n' "${BOLD}Desinstalacion${RESET}"
+  line
+
   remove_cron
   rm -f "$INSTALL_PATH"
-  echo "El script local ha sido eliminado."
-  echo "Se conservan $CONFIG_FILE y $LOG_FILE."
+  ok "Script local eliminado."
+
+  info "Se conservan:"
+  printf '  %s\n' "$CONFIG_FILE"
+  printf '  %s\n' "$LOG_FILE"
+}
+
+pause_menu() {
+  echo
+  read -r -p "Pulsa ENTER para volver al menu..." _
+}
+
+menu() {
+  while true; do
+    header
+    show_status_compact
+
+    printf '%b\n' "${BOLD}Selecciona una opcion:${RESET}"
+    echo
+    printf "  ${CYAN}1${RESET}) Instalar / reparar instalacion\n"
+    printf "  ${CYAN}2${RESET}) Actualizar script desde GitHub\n"
+    printf "  ${CYAN}3${RESET}) Ver estado y ultimos logs\n"
+    printf "  ${CYAN}4${RESET}) Ejecutar actualizacion ahora\n"
+    printf "  ${CYAN}5${RESET}) Ver configuracion y script\n"
+    printf "  ${CYAN}6${RESET}) Rotar log\n"
+    printf "  ${RED}7${RESET}) Desinstalar\n"
+    printf "  ${DIM}0${RESET}) Salir\n"
+    echo
+    line
+
+    read -r -p "Opcion: " option
+
+    case "$option" in
+      1) install_all; pause_menu ;;
+      2) update_local; pause_menu ;;
+      3) status_full; pause_menu ;;
+      4) run_now; pause_menu ;;
+      5) view_files; pause_menu ;;
+      6) rotate_log; pause_menu ;;
+      7)
+        remove_all
+        pause_menu
+        ;;
+      0)
+        clear_screen
+        exit 0
+        ;;
+      *)
+        warn "Opcion no valida."
+        sleep 1
+        ;;
+    esac
+  done
 }
 
 require_root
@@ -134,67 +363,24 @@ case "${1:-menu}" in
     install_all
     ;;
   update)
-    download_script
-    ;;
-  remove)
-    remove_all
+    update_local
     ;;
   status)
-    status
+    status_full
     ;;
   run)
     run_now
     ;;
   view)
-    [[ -f "$CONFIG_FILE" ]] && cat "$CONFIG_FILE"
-    echo
-    [[ -f "$INSTALL_PATH" ]] && cat "$INSTALL_PATH"
+    view_files
     ;;
   rotate)
-    if [[ -f "$LOG_FILE" ]]; then
-      mv -f "$LOG_FILE" "$LOG_FILE.old"
-      touch "$LOG_FILE"
-      chmod 0644 "$LOG_FILE"
-      echo "Log rotado a $LOG_FILE.old"
-    fi
+    rotate_log
+    ;;
+  remove)
+    remove_all
     ;;
   menu|*)
-    cat <<EOF
-
-Docker Compose Updater para Proxmox
-
-1) Add       Instalar script y cron
-2) Update    Actualizar copia local desde GitHub
-3) Status    Mostrar estado
-4) Run       Ejecutar ahora
-5) View      Ver configuracion y script
-6) Rotate    Rotar log
-7) Remove    Eliminar script y cron
-0) Exit
-
-EOF
-    read -r -p "Opcion: " option
-    case "$option" in
-      1) install_all ;;
-      2) download_script ;;
-      3) status ;;
-      4) run_now ;;
-      5)
-        [[ -f "$CONFIG_FILE" ]] && cat "$CONFIG_FILE"
-        echo
-        [[ -f "$INSTALL_PATH" ]] && cat "$INSTALL_PATH"
-        ;;
-      6)
-        if [[ -f "$LOG_FILE" ]]; then
-          mv -f "$LOG_FILE" "$LOG_FILE.old"
-          touch "$LOG_FILE"
-          chmod 0644 "$LOG_FILE"
-          echo "Log rotado a $LOG_FILE.old"
-        fi
-        ;;
-      7) remove_all ;;
-      0) exit 0 ;;
-      *) echo "Opcion no valida" ;;
-    esac
+    menu
     ;;
 esac
