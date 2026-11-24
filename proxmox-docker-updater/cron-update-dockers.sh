@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-SCRIPT_URL="${SCRIPT_URL:-https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/update-dockers.sh}"
+SCRIPT_URL="${SCRIPT_URL:-https://raw.githubusercontent.com/Camposmansi/proxmox/main/proxmox-docker-updater/update-dockers.sh}"
 INSTALL_PATH="/usr/local/bin/update-dockers.sh"
 CONFIG_FILE="/etc/update-dockers.conf"
 LOG_FILE="/var/log/update-dockers-cron.log"
